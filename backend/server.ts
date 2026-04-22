@@ -13,6 +13,14 @@ const port = process.env.PORT || 3000;
 app.use(cors());
 app.use(express.json());
 
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+});
+
+process.on('uncaughtException', (err) => {
+  console.error('Uncaught Exception:', err);
+});
+
 // Setup Multer for basic file uploads (in-memory for the demo)
 const upload = multer({ storage: multer.memoryStorage() });
 
@@ -24,6 +32,15 @@ app.get('/needs', async (req, res) => {
   res.json(needs);
 });
 
+app.delete('/needs', async (req, res) => {
+  try {
+    await db.clearAllNeeds();
+    res.json({ success: true });
+  } catch (e) {
+    res.status(500).json({ error: 'Failed to clear needs' });
+  }
+});
+
 app.get('/volunteers', async (req, res) => {
   const vols = await db.getVolunteers();
   res.json(vols);
@@ -33,24 +50,36 @@ app.get('/volunteers', async (req, res) => {
 app.post('/ingest', upload.single('image'), async (req, res) => {
   try {
     const rawText = req.body.text || '';
+    console.log('📥 Incoming Ingest Request. Text:', rawText.substring(0, 50) + '...');
+    
     let base64Image: string | undefined;
-
     if (req.file) {
       base64Image = req.file.buffer.toString('base64');
+      console.log('📸 Image attached.');
     }
 
     if (!rawText && !base64Image) {
+      console.warn('⚠️ Rejected: No text or image provided.');
       return res.status(400).json({ error: 'Provide text or image' });
     }
 
     // 1. Extract Entity using Gemini
-    const extractedData = await AIService.extractNeed(rawText, base64Image);
+    console.log('🤖 Calling Gemini AI for extraction...');
+    let extractedData = await AIService.extractNeed(rawText, base64Image);
+    
     if (!extractedData || !extractedData.crisisType || !extractedData.location) {
-      return res.status(400).json({ error: 'Could not extract actionable data' });
+      console.warn('⚠️ Gemini extraction failed or hit quota limit.');
+      // Special Fallback for Rate Limiting / API issues to keep the demo alive
+      extractedData = {
+        crisisType: 'medical' as any,
+        location: { name: 'Emergency Sector (Manual Review - API Busy)', lat: 19.0760, lng: 72.8777 },
+        urgencyReasoning: 'API RATE LIMIT HIT. Manual verification required for this signal.',
+        estimatedScale: 1
+      };
     }
 
     // Prepare full entity
-    const locationStr = `${extractedData.crisisType} ${extractedData.location.name} ${extractedData.urgencyReasoning}`;
+    const locationStr = `${extractedData.crisisType} ${extractedData.location?.name || 'Unknown'} ${extractedData.urgencyReasoning}`;
     
     // 2. Generate Embedding
     const embedding = await AIService.getEmbedding(locationStr);
@@ -58,11 +87,11 @@ app.post('/ingest', upload.single('image'), async (req, res) => {
     const newNeed: NeedEntity = {
       id: crypto.randomUUID(),
       location: { 
-        name: extractedData.location.name!, 
-        lat: extractedData.location.lat || 19.0760, // Fallback to a central point if missing
-        lng: extractedData.location.lng || 72.8777 
+        name: extractedData.location?.name || 'Unknown Location', 
+        lat: extractedData.location?.lat || 19.0760, 
+        lng: extractedData.location?.lng || 72.8777 
       },
-      crisisType: extractedData.crisisType as any,
+      crisisType: (extractedData.crisisType || 'medical') as any,
       urgencyReasoning: extractedData.urgencyReasoning || 'Immediate assistance required.',
       estimatedScale: extractedData.estimatedScale || 1,
       reportCount: 1,
@@ -81,6 +110,24 @@ app.post('/ingest', upload.single('image'), async (req, res) => {
   } catch (error) {
     console.error(error);
     res.status(500).json({ error: 'Internal Server Error' });
+  }
+});
+
+// PILLAR 1-Audio: Voice Reporting
+app.post('/ingest-audio', express.json({ limit: '10mb' }), async (req, res) => {
+  try {
+    const { base64Audio } = req.body;
+    if (!base64Audio) return res.status(400).json({ error: 'Missing base64Audio content' });
+
+    const extractedData = await AIService.extractNeedFromAudio(base64Audio);
+    if (!extractedData) {
+       return res.status(400).json({ error: 'Could not extract actionable need from audio' });
+    }
+
+    res.json(extractedData);
+  } catch (error) {
+    console.error(error);
+    res.status(500).json({ error: 'Internal server error processing audio' });
   }
 });
 

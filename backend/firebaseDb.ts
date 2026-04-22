@@ -4,73 +4,124 @@ import { NeedEntity, VolunteerProfile } from '../shared/types';
 import * as path from 'path';
 import * as fs from 'fs';
 
+import { db as mockDb } from './mockFirestore';
+
 // Initialize Firebase Admin
 const serviceAccountPath = path.join(__dirname, 'serviceAccount.json');
-if (fs.existsSync(serviceAccountPath)) {
-  const serviceAccount = require(serviceAccountPath);
-  admin.initializeApp({
-    credential: admin.credential.cert(serviceAccount)
-  });
-} else {
-  console.warn('⚠️ No serviceAccount.json found. Firestore operations will fail.');
-  // Initialize with dummy application default to not crash immediately
-  admin.initializeApp();
-}
+let firestore: admin.firestore.Firestore | null = null;
+let useMock = process.env.DISABLE_FIRESTORE === 'true';
 
-const firestore = admin.firestore();
+if (!useMock && fs.existsSync(serviceAccountPath)) {
+  try {
+    const serviceAccount = JSON.parse(fs.readFileSync(serviceAccountPath, 'utf8'));
+    admin.initializeApp({
+      credential: admin.credential.cert(serviceAccount),
+      projectId: serviceAccount.project_id
+    });
+    firestore = admin.firestore();
+    console.log('✅ Firebase Admin initialized (Real Cloud Mode).');
+  } catch (error) {
+    console.error('⚠️ Firebase init failed, falling back to local Mock:', (error as any).message);
+    useMock = true;
+  }
+} else if (useMock) {
+  console.log('🚀 Local Demo Mode: Firestore is explicitly DISABLED.');
+} else {
+  console.warn('⚠️ No serviceAccount.json found, using local Mock.');
+  useMock = true;
+}
 
 class FirebaseDb {
   // --- Needs ---
   async addNeed(need: NeedEntity): Promise<void> {
-    await firestore.collection('needs').doc(need.id).set(need);
+    if (useMock || !firestore) return mockDb.addNeed(need);
+    try {
+      await firestore.collection('needs').doc(need.id).set(need);
+    } catch (e) {
+      console.error("Firestore write failed, falling back to mock:", (e as any).message);
+      useMock = true;
+      return mockDb.addNeed(need);
+    }
   }
 
   async updateNeed(id: string, updates: Partial<NeedEntity>): Promise<void> {
-    await firestore.collection('needs').doc(id).update(updates);
+    if (useMock || !firestore) return mockDb.updateNeed(id, updates);
+    try {
+      await firestore.collection('needs').doc(id).update(updates);
+    } catch (e) {
+      useMock = true;
+      return mockDb.updateNeed(id, updates);
+    }
   }
 
   async getRecentUnresolvedNeeds(): Promise<NeedEntity[]> {
-    const TWELVE_HOURS = 12 * 60 * 60 * 1000;
-    const cutoffNode = Date.now() - TWELVE_HOURS;
-    
-    // We cannot use multiple inequalities in older Firestore without composite index easily,
-    // so we get all OPEN and CRITICAL_VELOCITY needs and filter locally for simplicity in MVP.
-    const snapshot = await firestore.collection('needs').get();
-    const needs: NeedEntity[] = [];
-    
-    snapshot.forEach(doc => {
-      const data = doc.data() as NeedEntity;
-      if (data.status !== 'RESOLVED' && data.reportedAt >= cutoffNode) {
-        needs.push(data);
-      }
-    });
-    
-    return needs;
+    if (useMock || !firestore) return mockDb.getRecentUnresolvedNeeds();
+    try {
+      const TWELVE_HOURS = 12 * 60 * 60 * 1000;
+      const cutoffNode = Date.now() - TWELVE_HOURS;
+      const snapshot = await firestore.collection('needs').get();
+      const needs: NeedEntity[] = [];
+      snapshot.forEach(doc => {
+        const data = doc.data() as NeedEntity;
+        if (data.status !== 'RESOLVED' && data.reportedAt >= cutoffNode) {
+          needs.push(data);
+        }
+      });
+      return needs;
+    } catch (e) {
+      console.warn("Firestore access denied. Falling back to local demo mode.");
+      useMock = true;
+      return mockDb.getRecentUnresolvedNeeds();
+    }
   }
 
   async getAllNeeds(): Promise<NeedEntity[]> {
-    const snapshot = await firestore.collection('needs').get();
-    const needs: NeedEntity[] = [];
-    snapshot.forEach(doc => needs.push(doc.data() as NeedEntity));
-    return needs;
+    if (useMock || !firestore) return mockDb.getAllNeeds();
+    try {
+      const snapshot = await firestore.collection('needs').get();
+      const needs: NeedEntity[] = [];
+      snapshot.forEach(doc => needs.push(doc.data() as NeedEntity));
+      return needs;
+    } catch (e) {
+      useMock = true;
+      return mockDb.getAllNeeds();
+    }
+  }
+
+  async clearAllNeeds(): Promise<void> {
+    if (useMock || !firestore) return mockDb.clearAllNeeds();
+    try {
+      const snapshot = await firestore.collection('needs').get();
+      const batch = firestore.batch();
+      snapshot.docs.forEach((doc) => batch.delete(doc.ref));
+      await batch.commit();
+    } catch (e) {
+      useMock = true;
+      return mockDb.clearAllNeeds();
+    }
   }
 
   // --- Volunteers ---
   async getVolunteers(): Promise<VolunteerProfile[]> {
-    const snapshot = await firestore.collection('volunteers').get();
-    const volunteers: VolunteerProfile[] = [];
-    snapshot.forEach(doc => volunteers.push(doc.data() as VolunteerProfile));
-    
-    if (volunteers.length === 0) {
-      // Seed dummy volunteers if empty
-      await this.seedVolunteers();
-      return this.getVolunteers();
+    if (useMock || !firestore) return mockDb.getVolunteers();
+    try {
+      const snapshot = await firestore.collection('volunteers').get();
+      const volunteers: VolunteerProfile[] = [];
+      snapshot.forEach(doc => volunteers.push(doc.data() as VolunteerProfile));
+      
+      if (volunteers.length === 0) {
+        await this.seedVolunteers();
+        return this.getVolunteers();
+      }
+      return volunteers;
+    } catch (e) {
+      useMock = true;
+      return mockDb.getVolunteers();
     }
-    
-    return volunteers;
   }
 
   private async seedVolunteers() {
+    if (useMock || !firestore) return;
     console.log("Seeding dummy volunteers to real Firestore...");
     const volunteersRef = firestore.collection('volunteers');
     const v1: VolunteerProfile = {

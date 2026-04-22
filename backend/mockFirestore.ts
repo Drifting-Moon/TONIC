@@ -74,6 +74,10 @@ class MockFirestore {
     return Array.from(this.needs.values());
   }
 
+  async clearAllNeeds(): Promise<void> {
+    this.needs.clear();
+  }
+
   // --- Requirements for Volunteers ---
   async getVolunteers(): Promise<VolunteerProfile[]> {
     return Array.from(this.volunteers.values());

@@ -26,12 +26,12 @@ export function haversineDistance(lat1: number, lon1: number, lat2: number, lon2
   return R * c;
 }
 
-const URGENCY_WEIGHTS: Record<string, number> = {
-  food: 1.8,
-  medical: 2.0,
-  water: 1.6,
-  shelter: 1.2,
-  infrastructure: 1.0
+const SEVERITY_WEIGHTS: Record<string, number> = {
+  medical: 100,
+  water: 90,
+  food: 80,
+  shelter: 70,
+  infrastructure: 50
 };
 
 export async function processDeduplication(newNeed: NeedEntity): Promise<NeedEntity> {
@@ -43,7 +43,6 @@ export async function processDeduplication(newNeed: NeedEntity): Promise<NeedEnt
   for (const existing of recentNeeds) {
     if (!existing.embedding || !newNeed.embedding) continue;
     
-    // Distance filter
     const dist = haversineDistance(
       newNeed.location.lat, newNeed.location.lng,
       existing.location.lat, existing.location.lng
@@ -58,35 +57,44 @@ export async function processDeduplication(newNeed: NeedEntity): Promise<NeedEnt
     }
   }
 
-  if (bestMatch) {
-    // Cluster merge
-    const mergedReportCount = bestMatch.reportCount + 1;
+  // Helper to compute exact Priority Score 0-100
+  const computeScore = (reportCount: number, firstReportedAt: number, crisisType: string, estimatedScale: number) => {
+    // 1. report_velocity: clamp to max ~100 (e.g. 50+ reports/hour gives 100 base velocity)
+    const hours = Math.max((Date.now() - firstReportedAt) / (1000 * 60 * 60), 0.1);
+    const velocityRaw = reportCount / hours;
+    const report_velocity = Math.min(100, velocityRaw * 5); // scaled assuming 20 rep/hr is severe
     
-    // Growth rate per hour since the first report in this cluster
-    const hoursSinceFirstReport = Math.max((Date.now() - bestMatch.reportedAt) / (1000 * 60 * 60), 0.1); // min 0.1h to prevent Infinity
-    const growthRatePerHour = mergedReportCount / hoursSinceFirstReport;
+    // 2. severity_weight: 0-100 from dict
+    const severity_weight = SEVERITY_WEIGHTS[crisisType] || 50;
     
-    // criticalityScore = reportCount * growthRatePerHour * urgencyWeight[crisisType]
-    const weight = URGENCY_WEIGHTS[bestMatch.crisisType] || 1.0;
-    const newCriticalityScore = mergedReportCount * growthRatePerHour * weight;
+    // 3. vulnerability_index: 0-100 based on scale
+    const vulnerability_index = Math.min(100, estimatedScale * 5); 
 
-    // Check CRITICAL_VELOCITY
-    const isCriticalVelocity = mergedReportCount >= 3 && hoursSinceFirstReport <= 12;
+    // Score = (report_velocity × 0.4) + (severity_weight × 0.4) + (vulnerability_index × 0.2)
+    const rawScore = (report_velocity * 0.4) + (severity_weight * 0.4) + (vulnerability_index * 0.2);
+    return Math.min(100, Math.max(0, rawScore));
+  };
+
+  if (bestMatch) {
+    const mergedReportCount = bestMatch.reportCount + 1;
+    const newCriticalityScore = computeScore(mergedReportCount, bestMatch.reportedAt, bestMatch.crisisType, Math.max(bestMatch.estimatedScale, newNeed.estimatedScale));
+    const hoursSinceFirstReport = Math.max((Date.now() - bestMatch.reportedAt) / (1000 * 60 * 60), 0.1);
+    const isCriticalVelocity = newCriticalityScore >= 80;
 
     const updatedNeed: NeedEntity = {
       ...bestMatch,
       reportCount: mergedReportCount,
       criticalityScore: newCriticalityScore,
+      estimatedScale: Math.max(bestMatch.estimatedScale, newNeed.estimatedScale),
       status: isCriticalVelocity ? 'CRITICAL_VELOCITY' : 'OPEN',
       rawInputs: [...bestMatch.rawInputs, ...newNeed.rawInputs],
-      // We generally keep the original reportedAt to track elapsed time accurately
     };
 
     await db.updateNeed(updatedNeed.id, updatedNeed);
     return updatedNeed;
   } else {
     // Brand new cluster
-    newNeed.criticalityScore = 1 * (1 / 0.1) * (URGENCY_WEIGHTS[newNeed.crisisType] || 1.0); // Initial dummy growth
+    newNeed.criticalityScore = computeScore(1, Date.now(), newNeed.crisisType, newNeed.estimatedScale);
     await db.addNeed(newNeed);
     return newNeed;
   }

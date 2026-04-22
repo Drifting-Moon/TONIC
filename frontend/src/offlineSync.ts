@@ -25,35 +25,38 @@ export async function saveOfflineReport(payload: { text?: string, imageBase64?: 
 }
 
 // Background Sync Loop
-export async function syncOfflineReports(apiBaseUrl: string) {
-  if (!navigator.onLine) return;
+export async function syncOfflineReports(apiBaseUrl: string, onSyncStart?: (count: number) => void): Promise<number> {
+  if (!navigator.onLine) return 0;
   
   const db = await initDB();
   const tx = db.transaction(SYNC_STORE_NAME, 'readwrite');
   const store = tx.objectStore(SYNC_STORE_NAME);
   const reports = await store.getAll();
   
-  if (reports.length === 0) return;
+  if (reports.length === 0) return 0;
   
+  if (onSyncStart) onSyncStart(reports.length);
   console.log(`Syncing ${reports.length} offline reports...`);
   
+  let synced = 0;
   for (const report of reports) {
     try {
-      // Re-construct the payload the backend expects
       const payload: any = {};
       if (report.text) payload.text = report.text;
       
-      // If we had genuine File passing we'd use FormData, but since we are mocking image Base64 in this demo via text:
-      // In MVP demo, if there is an image, we should probably encode it, but for our simple /ingest:
-      // (The backend currently uses multer but gracefully accepts req.body.text)
-      
       await axios.post(`${apiBaseUrl}/ingest`, payload);
       
-      // If success, delete from idb
       await store.delete(report.id);
-      console.log(`Successfully synced offline report ${report.id}`);
+      synced++;
+      
+      // Delay to avoid bombarding the AI API (stay under RPM limits)
+      if (synced < reports.length) {
+        console.log("Waiting 30s before next sync to honor API rate limits...");
+        await new Promise(resolve => setTimeout(resolve, 30000));
+      }
     } catch (e) {
       console.error(`Failed to sync report ${report.id}`, e);
     }
   }
+  return synced;
 }

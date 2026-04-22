@@ -142,12 +142,17 @@ app.post('/ingest', upload.single('image'), async (req, res) => {
       return res.status(400).json({ error: 'Provide text or image' });
     }
 
-    // 1. Extract Entity using Gemini
-    console.log('🤖 Calling Gemini AI for extraction...');
-    let extractedData = await AIService.extractNeed(rawText, base64Image);
-    
-    if (!extractedData || !extractedData.crisisType || !extractedData.location) {
-      console.warn('⚠️ Gemini unavailable — using smart local extraction for demo.');
+    // 1. Extract Entity using Gemini (with full fallback)
+    let extractedData;
+    try {
+      console.log('🤖 Calling Gemini AI for extraction...');
+      extractedData = await AIService.extractNeed(rawText, base64Image);
+      
+      if (!extractedData || !extractedData.crisisType || !extractedData.location) {
+        throw new Error('Incomplete data from AI');
+      }
+    } catch (e) {
+      console.warn('⚠️ Gemini unavailable or network error — using smart local extraction for demo.');
       extractedData = smartLocalExtract(rawText || 'emergency signal');
     }
 

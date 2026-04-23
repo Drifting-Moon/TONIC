@@ -84,9 +84,12 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
   const [currentText, setCurrentText] = useState("");
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isListening, setIsListening] = useState(false);
+  const [isMuted, setIsMuted] = useState(false);
   
   const recognitionRef = useRef<any>(null);
   const synthRef = useRef<SpeechSynthesis>(window.speechSynthesis);
+  const silenceTimerRef = useRef<any>(null);
+  const maxDurationTimerRef = useRef<any>(null);
   
   // Refs to fix stale closures
   const stepRef = useRef(step);
@@ -100,6 +103,12 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
     currentTextRef.current = currentText;
     userLangRef.current = userLang;
   }, [step, answers, currentText, userLang]);
+
+  useEffect(() => {
+    const handleVoices = () => {};
+    window.speechSynthesis.onvoiceschanged = handleVoices;
+    return () => { window.speechSynthesis.onvoiceschanged = null; };
+  }, []);
 
   // Initialize Speech Recognition
   useEffect(() => {
@@ -124,20 +133,42 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
           if (final) {
              setCurrentText(final);
              currentTextRef.current = final;
+             if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
              handleNext(final);
           } else {
              setCurrentText(interim);
              currentTextRef.current = interim;
+             
+             if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+             if (interim.trim().length > 0) {
+               silenceTimerRef.current = setTimeout(() => {
+                 handleNext(interim);
+               }, 2500);
+             }
           }
+        };
+
+        recognitionRef.current.onstart = () => {
+          setIsListening(true);
+          if (maxDurationTimerRef.current) clearTimeout(maxDurationTimerRef.current);
+          maxDurationTimerRef.current = setTimeout(() => {
+            if (currentTextRef.current === "" || !currentTextRef.current) {
+               handleNext(); 
+            }
+          }, 15000);
         };
 
         recognitionRef.current.onerror = (event: any) => {
           console.error("Speech Recognition Error", event.error);
           setIsListening(false);
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          if (maxDurationTimerRef.current) clearTimeout(maxDurationTimerRef.current);
         };
 
         recognitionRef.current.onend = () => {
           setIsListening(false);
+          if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+          if (maxDurationTimerRef.current) clearTimeout(maxDurationTimerRef.current);
         };
       }
     }
@@ -171,6 +202,11 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
   };
 
   const executeSpeech = (text: string, lang = 'en-US', onComplete?: () => void) => {
+    if (isMuted) {
+      if (onComplete) onComplete();
+      return;
+    }
+
     setIsSpeaking(true);
     synthRef.current.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
@@ -184,8 +220,6 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
          utterance.voice = premiumVoice;
       } else {
          let fallbackVoice = voices.find(v => v.lang.includes(lang));
-         // CRITICAL REGIONAL FALLBACK: If regional voice (like mr-IN) is missing from Windows, 
-         // use hi-IN (Hindi) to guarantee native Devanagari pronunciation instead of broken US English!
          if (!fallbackVoice && (lang.includes('mr') || lang.includes('ta') || lang.includes('bn') || lang.includes('te') || lang.includes('gu'))) {
              fallbackVoice = voices.find(v => v.lang.includes('hi-IN'));
          }
@@ -199,7 +233,7 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
         setIsSpeaking(false);
         if (onComplete) onComplete();
       }
-    }, 10000); // 10s maximum per phrase
+    }, 10000); 
     
     utterance.onend = () => {
       if (isCanceled) return;
@@ -208,20 +242,17 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
       if (onComplete) onComplete();
     };
     
-    // If canceled by another speech, ensure this one knows
     utterance.onerror = (e) => {
-       if (e.error === 'canceled') isCanceled = true;
+       if ((e as any).error === 'canceled') isCanceled = true;
        clearTimeout(timeout);
     };
     
-    // DELAYED START: Fixes Chrome race condition where speak() is ignored if called immediately after cancel()
     setTimeout(() => {
        if (!isCanceled) synthRef.current.speak(utterance);
     }, 50);
   };
 
   const speakGreeting = () => {
-    // Safety fallback: if speech synthesis fails or is blocked, move to lang selection after 3s
     const fallback = setTimeout(() => {
       if (stepRef.current === -2) {
         setStep(-1);
@@ -248,7 +279,6 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
       "Which language are you comfortable in answering? Please say English, Hindi, Marathi, Tamil, Bengali, or Telugu.",
       'en-IN',
       () => {
-         // Keep recognizing in en-IN to ensure Indian accents pronouncing regional language names are transcribed perfectly
          if (recognitionRef.current) recognitionRef.current.lang = 'en-IN';
          startListening();
       }
@@ -263,9 +293,6 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
     const synthLang = LANG_CONFIG[langKey].code;
     
     if (recognitionRef.current) {
-       // STRATEGIC FIX: If we are asking for location (idx === 2), we FORCE the STT engine 
-       // to transcribe in English ('en-IN') so that cities like "Faridabad" spell perfectly in Latin text. 
-       // This guarantees our backend local fallback mapper correctly identifies it instead of failing on Hindi scripts!
        if (idx === 2) {
          recognitionRef.current.lang = 'en-IN';
        } else {
@@ -299,7 +326,6 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
        const detectedLang = parseUserLanguage(finalAnswer);
        
        if (!detectedLang) {
-          // If the microphone picked up gibberish, don't silently default to English. Halt and force click.
           setCurrentText("Language not caught clearly. Please click a button below.");
           setIsListening(false);
           return;
@@ -334,7 +360,7 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
   };
 
   const submitReport = async (finalAnswers: string[]) => {
-    setStep(4); // Submitting
+    setStep(4); 
     setIsListening(false);
     
     const combinedReport = `Voice Report Transcript:
@@ -348,7 +374,7 @@ Note: Parse intelligently considering the user spoke in ${userLangRef.current}.`
     try {
       await axios.post(`${apiBase}/ingest`, { text: combinedReport });
       
-      setStep(5); // Success
+      setStep(5); 
       const langKey = userLangRef.current || 'english';
       const targetLang = SUCCESS_TRANSLATIONS[langKey];
       
@@ -380,9 +406,25 @@ Note: Parse intelligently considering the user spoke in ${userLangRef.current}.`
               </span>
             )}
           </div>
-          <button onClick={() => { synthRef.current.cancel(); if (recognitionRef.current) recognitionRef.current.abort(); onClose(); }} className="text-white/40 hover:text-white transition-colors">
-            <XMarkIcon className="w-6 h-6" />
-          </button>
+          <div className="flex items-center gap-2">
+            <button 
+              onClick={() => {
+                const newMuted = !isMuted;
+                setIsMuted(newMuted);
+                if (newMuted) {
+                  synthRef.current.cancel();
+                  setIsSpeaking(false);
+                }
+              }}
+              className={`p-2 rounded-lg border transition-all ${isMuted ? 'bg-red-500/10 border-red-500/30 text-red-400' : 'bg-white/5 border-white/10 text-white/40 hover:text-white'}`}
+              title={isMuted ? "Unmute AI Voice" : "Mute AI Voice"}
+            >
+              {isMuted ? <span className="text-xs">🔇</span> : <span className="text-xs">🔊</span>}
+            </button>
+            <button onClick={() => { synthRef.current.cancel(); if (recognitionRef.current) recognitionRef.current.abort(); onClose(); }} className="text-white/40 hover:text-white transition-colors">
+              <XMarkIcon className="w-6 h-6" />
+            </button>
+          </div>
         </div>
 
         {/* Content Body */}

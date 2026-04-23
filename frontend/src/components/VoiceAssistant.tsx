@@ -151,6 +151,8 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
   // Handle flow when opened
   useEffect(() => {
     if (isOpen) {
+      synthRef.current.cancel();
+      synthRef.current.resume();
       resetFlow();
       speakGreeting();
     } else {
@@ -192,9 +194,16 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
     }
 
     let isCanceled = false;
+    const timeout = setTimeout(() => {
+      if (!isCanceled) {
+        setIsSpeaking(false);
+        if (onComplete) onComplete();
+      }
+    }, 10000); // 10s maximum per phrase
     
     utterance.onend = () => {
       if (isCanceled) return;
+      clearTimeout(timeout);
       setIsSpeaking(false);
       if (onComplete) onComplete();
     };
@@ -202,18 +211,33 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
     // If canceled by another speech, ensure this one knows
     utterance.onerror = (e) => {
        if (e.error === 'canceled') isCanceled = true;
+       clearTimeout(timeout);
     };
     
-    synthRef.current.speak(utterance);
+    // DELAYED START: Fixes Chrome race condition where speak() is ignored if called immediately after cancel()
+    setTimeout(() => {
+       if (!isCanceled) synthRef.current.speak(utterance);
+    }, 50);
   };
 
   const speakGreeting = () => {
+    // Safety fallback: if speech synthesis fails or is blocked, move to lang selection after 3s
+    const fallback = setTimeout(() => {
+      if (stepRef.current === -2) {
+        setStep(-1);
+        askLanguage();
+      }
+    }, 3000);
+
     executeSpeech(
       "Namaste. Welcome to CommunityPulse Emergency Reporter.",
       'en-IN',
       () => {
-         setStep(-1);
-         askLanguage();
+         clearTimeout(fallback);
+         if (stepRef.current === -2) {
+           setStep(-1);
+           askLanguage();
+         }
       }
     );
   };
@@ -349,7 +373,7 @@ Note: Parse intelligently considering the user spoke in ${userLangRef.current}.`
         <div className="flex items-center justify-between p-5 border-b border-white/[0.05]">
           <div className="flex items-center gap-3 text-indigo-400 font-bold">
             <SparklesIcon className="w-5 h-5" />
-            <span className="tracking-wide">CommunityPulse Voice Reporter</span>
+            <span className="tracking-wide">Emergency AI Reporter</span>
             {step >= 0 && (
               <span className="px-2 py-0.5 ml-2 bg-indigo-500/20 text-indigo-300 rounded border border-indigo-500/30 text-[10px] uppercase font-bold tracking-widest">
                 Lang: {LANG_CONFIG[userLang]?.label || 'English'}
@@ -391,9 +415,8 @@ Note: Parse intelligently considering the user spoke in ${userLangRef.current}.`
                 <div className="h-16 w-full flex items-center justify-center italic text-blue-300 font-medium bg-blue-500/5 rounded-lg border border-blue-500/10 px-4 mb-4">
                   {isListening ? (currentText || "Listening...") : (isSpeaking ? "Speaking..." : "Please wait...")}
                 </div>
-                {/* Failsafe Manual Selector */}
-                {!isSpeaking && (
-                   <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
+                {/* Failsafe Manual Selector - Always visible to prevent being stuck */}
+                <div className="flex flex-wrap items-center justify-center gap-2 mt-2">
                      {['English', 'Hindi', 'Marathi', 'Tamil', 'Bengali', 'Telugu'].map(lang => (
                        <button
                          key={lang}
@@ -403,8 +426,7 @@ Note: Parse intelligently considering the user spoke in ${userLangRef.current}.`
                          {lang}
                        </button>
                      ))}
-                   </div>
-                )}
+              </div>
              </div>
           )}
 
@@ -436,11 +458,14 @@ Note: Parse intelligently considering the user spoke in ${userLangRef.current}.`
 
         </div>
 
-        {/* Footer Actions */}
-        {step >= -1 && step < 4 && !isSpeaking && (
-           <div className="p-4 bg-white/[0.02] border-t border-white/[0.05] flex justify-end">
-             <button onClick={() => handleNext()} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors">
-                Skip <ArrowRightIcon className="w-4 h-4" />
+        {/* Footer Actions - Always show Skip/Next if speaking hangs */}
+        {step >= -1 && step < 4 && (
+           <div className="p-4 bg-white/[0.02] border-t border-white/[0.05] flex justify-between items-center">
+             <div className="text-[10px] text-white/20 italic">
+               Tip: You can click the language buttons directly if audio is muted.
+             </div>
+             <button onClick={() => { synthRef.current.cancel(); setIsSpeaking(false); handleNext(); }} className="flex items-center gap-1.5 px-4 py-2 bg-slate-800 hover:bg-slate-700 text-white rounded-lg text-sm font-medium transition-colors">
+                Skip / Next <ArrowRightIcon className="w-4 h-4" />
              </button>
            </div>
         )}

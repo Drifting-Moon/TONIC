@@ -14,6 +14,7 @@ import AnalyticsPage from './pages/AnalyticsPage';
 import HistoryPage from './pages/HistoryPage';
 import AiAssistantPage from './pages/AiAssistantPage';
 import VoiceAssistant from './components/VoiceAssistant';
+import VoiceCallModal from './components/VoiceCallModal';
 import PredictionAlertBar from './components/PredictionAlertBar';
 
 const API_BASE = 'http://localhost:3000';
@@ -148,6 +149,7 @@ export default function App() {
   // Simulation State
   const [isSimulating, setIsSimulating] = useState(false);
   const [isVoiceOpen, setIsVoiceOpen] = useState(false);
+  const [isCallModalOpen, setIsCallModalOpen] = useState(false);
   const [simCount, setSimCount] = useState(0);
   const simTimerRef = useRef<any>(null);
 
@@ -438,29 +440,35 @@ export default function App() {
 
       {/* Top Banner */}
       {showBanner && (
-        <div className="flex-shrink-0 mb-6 bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/15 rounded-xl p-4 flex justify-between items-center relative shadow-xl">
-          <h3 className="font-bold text-white tracking-wide ml-2">🚨 CommunityPulse AI is live and monitoring {new Set(needs.filter(n => n?.location?.name).map(n => n.location.name)).size || 4} cities</h3>
-          
-          <div className="flex space-x-10 mr-8">
-             <div className="flex flex-col items-center">
-                <span className="text-white text-2xl mono font-bold leading-none">{needs.filter(n => n?.status === 'OPEN').length}</span>
-                <span className="text-blue-300/80 text-[10px] uppercase tracking-[0.1em] font-bold mt-1">Active Crises</span>
-             </div>
-             <div className="flex flex-col items-center">
-                <span className="text-white text-2xl mono font-bold leading-none">{(volunteers || []).filter(v => v?.status === 'AVAILABLE').length || 184}</span>
-                <span className="text-purple-300/80 text-[10px] uppercase tracking-[0.1em] font-bold mt-1">Volunteers Ready</span>
-             </div>
-             <div className="flex flex-col items-center">
-                <span className="text-white text-2xl mono font-bold leading-none">
-                  {needs.length ? (needs.reduce((a, b) => a + (b?.criticalityScore || 0), 0) / needs.length).toFixed(0) : 0}
-                </span>
-                <span className="text-indigo-300/80 text-[10px] uppercase tracking-[0.1em] font-bold mt-1">Avg Severity Score</span>
-             </div>
+        <div className="flex-shrink-0 mb-6 bg-gradient-to-br from-blue-500/10 to-purple-500/10 border border-blue-500/15 rounded-xl p-4 flex justify-between items-center relative shadow-xl overflow-hidden">
+          <div className="flex items-center space-x-6">
+            <h3 className="font-bold text-white tracking-wide ml-2 whitespace-nowrap">🚨 CommunityPulse AI is live and monitoring {new Set(needs.filter(n => n?.location?.name).map(n => n.location.name)).size || 4} cities</h3>
+            
+            <div className="hidden lg:flex space-x-8">
+               <div className="flex flex-col items-center">
+                  <span className="text-white text-xl mono font-bold leading-none">{needs.filter(n => n?.status === 'OPEN').length}</span>
+                  <span className="text-blue-300/80 text-[9px] uppercase tracking-[0.1em] font-bold mt-1">Active Crises</span>
+               </div>
+               <div className="flex flex-col items-center">
+                  <span className="text-white text-xl mono font-bold leading-none">{(volunteers || []).filter(v => v?.status === 'AVAILABLE').length || 184}</span>
+                  <span className="text-purple-300/80 text-[9px] uppercase tracking-[0.1em] font-bold mt-1">Volunteers Ready</span>
+               </div>
+            </div>
           </div>
 
-          <button onClick={() => setShowBanner(false)} className="absolute top-2 right-2 text-white/40 hover:text-white bg-transparent p-1 transition-colors">
-            <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
-          </button>
+          <div className="flex items-center space-x-4 mr-10">
+            <button 
+              onClick={() => setIsVoiceOpen(true)}
+              className="bg-[#16a34a] hover:bg-[#15803d] text-white px-4 py-1.5 rounded-full text-[12px] font-bold transition-all duration-300 flex items-center h-9 shadow-[0_4px_12px_rgba(22,163,74,0.3)] active:scale-95 z-[100]"
+            >
+              <span className="mr-2 text-lg">📞</span>
+              Emergency Call
+            </button>
+
+            <button onClick={() => setShowBanner(false)} className="text-white/40 hover:text-white bg-transparent p-1 transition-colors">
+              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" viewBox="0 0 20 20" fill="currentColor"><path fillRule="evenodd" d="M4.293 4.293a1 1 0 011.414 0L10 8.586l4.293-4.293a1 1 0 111.414 1.414L11.414 10l4.293 4.293a1 1 0 01-1.414 1.414L10 11.414l-4.293 4.293a1 1 0 01-1.414-1.414L8.586 10 4.293 5.707a1 1 0 010-1.414z" clipRule="evenodd" /></svg>
+            </button>
+          </div>
         </div>
       )}
 
@@ -871,20 +879,15 @@ export default function App() {
          <div className="h-[56px] flex-shrink-0 bg-[#070B14] border-b border-white/[0.06] px-6 flex justify-between items-center z-50">
             <div className="flex items-center space-x-4">
               <h2 className="font-bold text-[1rem] text-white">{getPageTitle()}</h2>
-              {/* Navigation Bar Action Panel */}
               <div className="flex items-center gap-3 ml-4">
-                {/* Voice Assistant Navigation Trigger */}
+                {/* Compact Emergency Call in Header */}
                 <button 
                   onClick={() => setIsVoiceOpen(true)}
-                  className="bg-gradient-to-r from-[#00bcd4]/10 to-[#1a237e]/30 hover:from-[#00bcd4]/30 hover:to-[#1a237e]/50 border border-[#00bcd4]/40 hover:shadow-[0_0_15px_rgba(0,188,212,0.4)] text-[#00bcd4] px-3 py-1 rounded-full text-[10px] font-bold transition-all duration-300 flex items-center h-7 hover-ring-shake"
+                  className="bg-red-600/10 hover:bg-red-600/20 text-red-500 border border-red-500/30 w-8 h-8 rounded-full flex items-center justify-center transition-all shadow-lg group relative"
+                  title="Emergency Call"
                 >
-                  <div className="relative mr-2 flex items-center justify-center">
-                    <div className="absolute inset-0 bg-green-500 rounded-full animate-ripple opacity-40"></div>
-                    <div className="relative w-3 h-3 bg-green-400 rounded-full animate-phone-ring shadow-[0_0_5px_#4ade80] flex items-center justify-center z-10">
-                       <PhoneIcon className="w-2 h-2 text-white phone-icon" />
-                    </div>
-                  </div>
-                  Voice Reporter
+                   <div className="absolute inset-0 bg-red-500 rounded-full animate-ping opacity-20 group-hover:opacity-40"></div>
+                   <PhoneIcon className="w-4 h-4 z-10" />
                 </button>
 
                 {/* Simulate Crisis Trigger */}
@@ -960,6 +963,15 @@ export default function App() {
       {/* AI Voice Assistant */}
       <VoiceAssistant isOpen={isVoiceOpen} onClose={() => setIsVoiceOpen(false)} apiBase={API_BASE} />
       
+      <VoiceCallModal 
+        isOpen={isCallModalOpen} 
+        onClose={() => setIsCallModalOpen(false)} 
+        onSubmit={(text) => {
+          setIngestText(text);
+          // Auto-submit or just let user see it in the text box
+          console.log("Transcribed Emergency Call:", text);
+        }} 
+      />
     </div>
   );
 }

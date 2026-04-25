@@ -126,8 +126,8 @@ export default function ReportPage() {
 
   const startRecording = () => {
     const win = window as unknown as { 
-      SpeechRecognition?: any; 
-      webkitSpeechRecognition?: any; 
+      SpeechRecognition?: typeof SpeechRecognition; 
+      webkitSpeechRecognition?: typeof SpeechRecognition; 
     };
     const SpeechRec = win.SpeechRecognition || win.webkitSpeechRecognition;
     if (!SpeechRec) return alert("Voice not supported");
@@ -135,7 +135,7 @@ export default function ReportPage() {
     const recognition = new SpeechRec();
     recognition.lang = 'en-IN';
     recognition.onstart = () => setIsRecording(true);
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
       setDescription(event.results[0][0].transcript);
       setIsRecording(false);
     };

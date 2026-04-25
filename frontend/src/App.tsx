@@ -364,22 +364,14 @@ export default function App() {
   };
 
   const startRecording = async () => {
-    interface SpeechRecognitionEvent {
-      results: { transcript: string }[][];
-    }
-    interface SpeechRecognitionError {
-      error: string;
-    }
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
 
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-
-    if (!SpeechRecognition) {
+    if (!SpeechRec) {
       alert("Voice input is not supported in this browser. Please use Chrome and type your report.");
       return;
     }
 
-    const recognition = new SpeechRecognition();
+    const recognition = new SpeechRec();
     recognition.lang = 'en-IN';
     recognition.interimResults = false;
     recognition.maxAlternatives = 1;
@@ -395,7 +387,7 @@ export default function App() {
       setIsRecording(false);
     };
 
-    recognition.onerror = (event: SpeechRecognitionError) => {
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       console.error('Speech recognition error:', event.error);
       setIsRecording(false);
       if (event.error === 'not-allowed') {

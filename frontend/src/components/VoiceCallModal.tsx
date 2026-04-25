@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { MicrophoneIcon, PhoneXMarkIcon } from '@heroicons/react/24/solid';
 
 interface VoiceCallModalProps {
@@ -10,26 +10,35 @@ interface VoiceCallModalProps {
 export default function VoiceCallModal({ isOpen, onClose, onSubmit }: VoiceCallModalProps) {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
-  const recognitionRef = useRef<any>(null);
+  
+  // Correct types for Web Speech API and ref-based stability
+  const recognitionRef = useRef<SpeechRecognition | null>(null);
+  const transcriptRef = useRef(transcript);
+
+  useEffect(() => {
+    transcriptRef.current = transcript;
+  }, [transcript]);
 
   useEffect(() => {
     if (!isOpen) {
       if (recognitionRef.current) {
-        try { recognitionRef.current.stop(); } catch (e) {}
+        try { recognitionRef.current.stop(); } catch { /* ignore */ }
       }
-      setIsListening(false);
-      setTranscript('');
+      setTimeout(() => {
+        setIsListening(false);
+        setTranscript('');
+      }, 0);
       return;
     }
 
-    const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-    if (!SpeechRecognition) {
+    const SpeechRec = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SpeechRec) {
       alert("Voice input is not supported in this browser. Please use Chrome.");
       onClose();
       return;
     }
 
-    const recognition = new SpeechRecognition();
+    const recognition = new SpeechRec();
     recognition.lang = 'en-IN';
     recognition.interimResults = true;
     recognition.maxAlternatives = 1;
@@ -39,15 +48,16 @@ export default function VoiceCallModal({ isOpen, onClose, onSubmit }: VoiceCallM
       setTranscript('');
     };
 
-    recognition.onresult = (event: any) => {
+    recognition.onresult = (event: SpeechRecognitionEvent) => {
       let currentTranscript = '';
-      for (let i = 0; i < event.results.length; ++i) {
+      for (let i = event.resultIndex; i < event.results.length; ++i) {
         currentTranscript += event.results[i][0].transcript;
       }
       setTranscript(currentTranscript);
+      transcriptRef.current = currentTranscript;
     };
 
-    recognition.onerror = (event: any) => {
+    recognition.onerror = (event: SpeechRecognitionErrorEvent) => {
       console.error('Speech recognition error:', event.error);
       setIsListening(false);
     };
@@ -63,10 +73,11 @@ export default function VoiceCallModal({ isOpen, onClose, onSubmit }: VoiceCallM
 
   const handleEndCall = () => {
     if (recognitionRef.current) {
-      try { recognitionRef.current.stop(); } catch (e) {}
+      try { recognitionRef.current.stop(); } catch { /* ignore */ }
     }
-    if (transcript.trim()) {
-      onSubmit(transcript);
+    const finalTranscript = transcriptRef.current;
+    if (finalTranscript.trim()) {
+      onSubmit(finalTranscript);
     }
     onClose();
   };

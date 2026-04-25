@@ -3,111 +3,118 @@ import { VolunteerProfile, NeedEntity } from '../shared/types';
 import dotenv from 'dotenv';
 dotenv.config();
 
-// Initialize the correct Gemini SDK
-const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY || 'dummy-key');
-
 export class AIService {
+  private static _genAI: GoogleGenerativeAI | null = null;
+  private static MODELS = ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-2.5-flash-lite', 'gemini-3-flash-preview'];
+
+  private static getGenAI() {
+    if (!this._genAI) {
+      const key = process.env.GEMINI_API_KEY;
+      this._genAI = new GoogleGenerativeAI(key || 'dummy-key');
+    }
+    return this._genAI;
+  }
+
+  private static async callWithRotation(fn: (modelName: string) => Promise<any>) {
+    let lastError: any = null;
+    for (const modelName of this.MODELS) {
+      try {
+        return await fn(modelName);
+      } catch (e: any) {
+        lastError = e;
+        // Rotate on 429 (Quota), 404 (Not Found), or 503 (Overloaded)
+        if (e.status === 429 || e.status === 404 || e.status === 503) {
+          console.warn(`⚠️ Model ${modelName} unavailable (${e.status}). Rotating...`);
+          continue;
+        }
+        throw e;
+      }
+    }
+    throw lastError;
+  }
 
   static async extractNeed(text: string, base64Image?: string): Promise<Partial<NeedEntity> | null> {
     const prompt = `
     You are an emergency response AI. Extract distress signal data from the input (text and/or image).
-
-   If the input is vague, meaningless, or does not clearly describe a real-world crisis event, return null instead of guessing or fabricating data.
-
-    If an image is provided, analyze it for visible signs of disaster (flooding, smoke/fire, structural damage, etc.).
-
-    Output JSON strictly matching this schema:
-    {
-      "location": { "name": string, "lat": number, "lng": number },
-      "crisisType": "food" | "medical" | "shelter" | "water" | "infrastructure",
-      "urgencyReasoning": string,
-      "originalLanguage": string,
-      "estimatedScale": number
-    }
-
+    CRITICAL: You must identify the EXACT neighborhood or landmark and provide precise GPS coordinates (lat/lng) for highlighting on a map.
+    If the input is vague, meaningless, or does not clearly describe a real-world crisis event, return null.
+    Output JSON strictly matching this schema.
     User Text Input: "${text || 'No text provided. Analyze image only.'}"
-  `;
+    `;
 
     try {
-      const model = genAI.getGenerativeModel({
-        model: 'gemini-2.0-flash-lite',
-        generationConfig: {
-          responseMimeType: 'application/json',
-          responseSchema: {
-            type: SchemaType.OBJECT,
-            properties: {
-              location: {
-                type: SchemaType.OBJECT,
-                properties: {
-                  name: { type: SchemaType.STRING },
-                  lat: { type: SchemaType.NUMBER },
-                  lng: { type: SchemaType.NUMBER }
+      return await this.callWithRotation(async (modelName) => {
+        const model = this.getGenAI().getGenerativeModel({
+          model: modelName,
+          generationConfig: {
+            responseMimeType: 'application/json',
+            responseSchema: {
+              type: SchemaType.OBJECT,
+              properties: {
+                location: {
+                  type: SchemaType.OBJECT,
+                  properties: {
+                    name: { type: SchemaType.STRING },
+                    lat: { type: SchemaType.NUMBER },
+                    lng: { type: SchemaType.NUMBER }
+                  },
+                  required: ['name']
                 },
-                required: ['name']
+                crisisType: {
+                  type: SchemaType.STRING,
+                  enum: ['food', 'medical', 'shelter', 'water', 'infrastructure'],
+                  format: "enum"
+                },
+                urgencyReasoning: { type: SchemaType.STRING },
+                originalLanguage: { type: SchemaType.STRING },
+                estimatedScale: { type: SchemaType.NUMBER }
               },
-              crisisType: {
-                type: SchemaType.STRING,
-                enum: ['food', 'medical', 'shelter', 'water', 'infrastructure'],
-                format: "enum"
-              },
-              urgencyReasoning: { type: SchemaType.STRING },
-              originalLanguage: { type: SchemaType.STRING },
-              estimatedScale: { type: SchemaType.NUMBER }
-            },
-            required: ['location', 'crisisType', 'urgencyReasoning']
-          }
-        }
-      });
-
-      const parts: any[] = [{ text: prompt }];
-      if (base64Image) {
-        parts.push({
-          inlineData: {
-            mimeType: 'image/jpeg',
-            data: base64Image
+              required: ['location', 'crisisType', 'urgencyReasoning']
+            }
           }
         });
-      }
 
-      const response = await model.generateContent(parts);
-      let result;
-      try {
-        result = JSON.parse(response.response.text());
-      } catch {
-        console.warn('⚠️ Invalid JSON from Gemini');
-        return null;
-      }
-      return result;
+        const parts: any[] = [{ text: prompt }];
+        if (base64Image) parts.push({ inlineData: { mimeType: 'image/jpeg', data: base64Image } });
+
+        const response = await model.generateContent(parts);
+        const result = JSON.parse(response.response.text());
+
+        // GEOGRAPHICAL VALIDATION (Prevent Hallucinations)
+        if (result.location && result.location.name) {
+          const locName = result.location.name.toLowerCase();
+          
+          // Emergency Correction for common Indian cities if AI gets lat/lng wrong
+          if (locName.includes('noida') && (result.location.lat < 28 || result.location.lat > 29)) {
+             result.location.lat = 28.6282; result.location.lng = 77.3649; // Correct Noida Sec 62
+          } else if (locName.includes('mumbai') && (result.location.lat > 20 || result.location.lat < 18)) {
+             result.location.lat = 19.0760; result.location.lng = 72.8777;
+          } else if (locName.includes('delhi') && (result.location.lat < 28 || result.location.lat > 29)) {
+             result.location.lat = 28.6139; result.location.lng = 77.2090;
+          }
+        }
+
+        return result;
+      });
     } catch (e: any) {
-      if (e.status === 429) {
-        console.warn('⚠️ Gemini Quota Exceeded (429). Returning null for fallback handling.');
-        return null;
-      }
-      console.error('Gemini extraction failed:', e);
-      throw e;
+      console.warn('⚠️ All models exhausted or failed:', e.message || e);
+      return null;
     }
   }
 
   static async transcribeAudio(base64Audio: string): Promise<string | null> {
     const prompt = `Transcribe the spoken words in this audio clip exactly.Return only the transcription as plain text, nothing else.`;
-
     try {
-      const model = genAI.getGenerativeModel({
-        model: 'gemini-2.0-flash-lite',
+      return await this.callWithRotation(async (modelName) => {
+        const model = this.getGenAI().getGenerativeModel({ model: modelName });
+        const parts = [
+          { inlineData: { mimeType: 'audio/webm', data: base64Audio } },
+          { text: prompt }
+        ];
+        const response = await model.generateContent(parts);
+        return response.response.text();
       });
-
-      const parts = [
-        { inlineData: { mimeType: 'audio/webm', data: base64Audio } },
-        { text: prompt }
-      ];
-
-      const response = await model.generateContent(parts);
-      return response.response.text();
     } catch (e: any) {
-      if (e.status === 429) {
-        console.warn('⚠️ Gemini Quota hit during audio transcription (429). Returning null.');
-        return null;
-      }
       console.error('Audio transcription failed:', e);
       return null;
     }
@@ -115,7 +122,7 @@ export class AIService {
 
   static async getEmbedding(text: string): Promise<number[]> {
     try {
-      const model = genAI.getGenerativeModel({ model: 'gemini-embedding-001' });
+      const model = this.getGenAI().getGenerativeModel({ model: 'gemini-embedding-001' });
       const result = await model.embedContent(text);
       return result.embedding.values;
     } catch (e) {
@@ -125,102 +132,45 @@ export class AIService {
   }
 
   static async generateDispatchMessage(volunteer: VolunteerProfile, need: NeedEntity): Promise<string> {
-    const prompt = `
-      Compose a short WhatsApp message to dispatch volunteer ${volunteer.name}. 
-      Strictly format the output EXACTLY like this(translate to ${volunteer.preferredLanguage} if it's not English):
-    "Hi ${volunteer.name}, there's a ${need.crisisType} emergency near ${need.location.name}. Your ${volunteer.skills[0]} expertise is urgently needed."
-    `;
-
+    const prompt = `Compose a short message to dispatch ${volunteer.name} for ${need.crisisType} at ${need.location.name}.`;
     try {
-      const model = genAI.getGenerativeModel({ model: 'gemini-2.0-flash-lite' });
-      const response = await model.generateContent(prompt);
-      return response.response.text();
+      return await this.callWithRotation(async (modelName) => {
+        const model = this.getGenAI().getGenerativeModel({ model: modelName });
+        const response = await model.generateContent(prompt);
+        return response.response.text();
+      });
     } catch (e) {
-      console.error('Dispatch generation failed:', e);
       return `Emergency: ${need.crisisType} at ${need.location.name}. Urgent help needed!`;
     }
   }
 
   static async askAssistant(messages: any[], contextData: any): Promise<string> {
-    const userQuery = messages[messages.length - 1].content.toLowerCase();
-
-    // 1. CLOUD INTELLIGENCE (Priority)
-    const modelName = 'gemini-2.0-flash-lite';
+    const prompt = `Context: ${JSON.stringify(contextData)}. User: ${messages[messages.length - 1].content}`;
     try {
-      const model = genAI.getGenerativeModel({ model: modelName });
-      const prompt = `You are a crisis coordination AI. Context: ${JSON.stringify(contextData)}. User: ${messages[messages.length - 1].content}`;
-      const response = await model.generateContent(prompt);
-      const text = response.response.text();
-      if (text) return text;
+      return await this.callWithRotation(async (modelName) => {
+        const model = this.getGenAI().getGenerativeModel({ model: modelName });
+        const response = await model.generateContent(prompt);
+        return response.response.text();
+      });
     } catch (e: any) {
-      console.warn(`Cloud attempt failed: ${e.message}`);
+      return "[Local Intelligence Fallback] My cloud brain is resting. Please check the database manually.";
     }
-
-    // 2. SAFETY NET (LHI Fallback)
-    const incidents = contextData.activeIncidents || [];
-    const volunteers = contextData.volunteers || [];
-
-    if (userQuery.includes('volunteer')) {
-      const avail = volunteers.filter((v: any) => v.available).length;
-      return `Currently, there are ${avail} volunteers available for dispatch.Coordination focuses on cities like ${[...new Set(volunteers.slice(0, 5).map((v: any) => v.city))].join(', ')}.`;
-    }
-
-    if (userQuery.includes('urgent') || userQuery.includes('area') || userQuery.includes('help')) {
-      const top = incidents.sort((a: any, b: any) => b.score - a.score)[0];
-      return top
-        ? `The most critical incident is in ${top.loc} (Severity: ${top.score}). It is categorized as a ${top.type} emergency requiring immediate attention.`
-        : "All clear. No active crises detected in the live data stream.";
-    }
-
-    if (userQuery.includes('summarize') || userQuery.includes('summary') || userQuery.includes('crises')) {
-      const types = [...new Set(incidents.map((i: any) => i.type))];
-      return `[Local Summary] There are ${incidents.length} active incidents.Types involved: ${types.join(', ')}. Most critical locations: ${incidents.slice(0, 3).map((i: any) => i.loc).join(', ')}.`;
-    }
-
-    return "[Local Intelligence Fallback] My cloud brain is currently resting due to high traffic, but my local scanners show " + incidents.length + " active crises and " + volunteers.filter((v: any) => v.available).length + " available volunteers. What specific metric can I look up for you in the database?";
   }
 
-    static async getPredictions(incidents: any[]): Promise<any[]> {
-    const fallbackPredictions = [
-      {
-        "city": "Mumbai",
-        "predictedCrisisType": "flood",
-        "riskLevel": "HIGH",
-        "confidenceScore": 88,
-        "reasoning": "Early monsoon surge detected in satellite imagery.",
-        "recommendedPreventiveAction": "Stage rescue boats in low-lying Kurla."
-      },
-      {
-        "city": "Delhi",
-        "predictedCrisisType": "fire",
-        "riskLevel": "CRITICAL",
-        "confidenceScore": 92,
-        "reasoning": "Heatwave escalation paired with power grid load.",
-        "recommendedPreventiveAction": "Mobilize fire tankers to industrial clusters."
-      },
-      {
-        "city": "Bengaluru",
-        "predictedCrisisType": "medical",
-        "riskLevel": "MEDIUM",
-        "confidenceScore": 64,
-        "reasoning": "Localized water reports indicate gastroenteritis spike.",
-        "recommendedPreventiveAction": "Distribute hygiene kits to local clinics."
-      }
-    ];
-
-    const prompt = `Analyze these crises and predict TOP 3 likely escalations: ${JSON.stringify(incidents)}. Return JSON array with city, predictedCrisisType, riskLevel, confidenceScore, reasoning, recommendedPreventiveAction.`;
-
+  static async getPredictions(incidents: any[]): Promise<any[]> {
+    const fallbackPredictions = [{ city: "Mumbai", predictedCrisisType: "flood", riskLevel: "HIGH", confidenceScore: 88, reasoning: "Satellite data", recommendedPreventiveAction: "Stage boats" }];
+    const prompt = `Analyze: ${JSON.stringify(incidents)}. Return JSON array of TOP 3 escalations.`;
     try {
-      const model = genAI.getGenerativeModel({
-        model: 'gemini-2.0-flash-lite',
-        generationConfig: { responseMimeType: 'application/json' }
+      return await this.callWithRotation(async (modelName) => {
+        const model = this.getGenAI().getGenerativeModel({
+          model: modelName,
+          generationConfig: { responseMimeType: 'application/json' }
+        });
+        const response = await model.generateContent(prompt);
+        return JSON.parse(response.response.text());
       });
-      const response = await model.generateContent(prompt);
-      const result = JSON.parse(response.response.text());
-      if (result && Array.isArray(result) && result.length > 0) return result;
     } catch (e: any) {
-      console.warn('⚠️ Prediction attempt failed. Error:', e.message || e);
+      return fallbackPredictions;
     }
-    return fallbackPredictions;
   }
 }

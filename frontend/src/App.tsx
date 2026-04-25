@@ -918,17 +918,33 @@ export default function App() {
                     <TileLayer url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}" attribution='Tiles &copy; Esri &mdash; Source: Esri, i-cubed, USDA, USGS, AEX, GeoEye, Getmapping, Aerogrid, IGN, IGP, UPR-EGP, and the GIS User Community' />
                   )}
                   <HeatmapOverlay data={heatmapData} />
+                  
+                  {/* Highlight Circle for Selected Need */}
+                  {selectedNeed && selectedNeed.location?.lat && selectedNeed.location?.lng && (
+                    <Circle
+                      center={[selectedNeed.location.lat, selectedNeed.location.lng]}
+                      radius={(selectedNeed.estimatedScale || 10) * 200} // Dynamic radius
+                      pathOptions={{
+                        color: '#3B82F6',
+                        fillColor: '#3B82F6',
+                        fillOpacity: 0.2,
+                        weight: 2,
+                        dashArray: '10, 10',
+                        className: 'animate-pulse-slow' // Custom pulse class
+                      }}
+                    />
+                  )}
+
                   {needs.filter(n => n.status !== 'RESOLVED' && n.location?.lat && n.location?.lng).map(need => (
                     <Circle
                       key={need.id}
                       center={[need.location.lat, need.location.lng]}
-                      radius={30000}
+                      radius={selectedNeed?.id === need.id ? 2000 : 800} // Larger if selected
                       pathOptions={{
-                        color: getCrisisStyle(need.crisisType).borderColor,
+                        color: selectedNeed?.id === need.id ? '#FFFFFF' : getCrisisStyle(need.crisisType).borderColor,
                         fillColor: getCrisisStyle(need.crisisType).borderColor,
-                        fillOpacity: 0.4,
-                        weight: 2,
-                        dashArray: need.status === 'CRITICAL_VELOCITY' ? '5, 10' : undefined
+                        fillOpacity: 0.6,
+                        weight: selectedNeed?.id === need.id ? 3 : 1,
                       }}
                       eventHandlers={{
                         click: () => setSelectedNeed(need)

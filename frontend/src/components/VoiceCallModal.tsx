@@ -7,6 +7,21 @@ interface VoiceCallModalProps {
   onSubmit: (text: string) => void;
 }
 
+interface SpeechRecognitionEvent {
+  resultIndex: number;
+  results: {
+    [key: number]: {
+      [key: number]: { transcript: string };
+      isFinal: boolean;
+    };
+    length: number;
+  };
+}
+
+interface SpeechRecognitionErrorEvent {
+  error: string;
+}
+
 export default function VoiceCallModal({ isOpen, onClose, onSubmit }: VoiceCallModalProps) {
   const [isListening, setIsListening] = useState(false);
   const [transcript, setTranscript] = useState('');
@@ -24,7 +39,9 @@ export default function VoiceCallModal({ isOpen, onClose, onSubmit }: VoiceCallM
       if (recognitionRef.current) {
         try { recognitionRef.current.stop(); } catch { /* ignore */ }
       }
+      // eslint-disable-next-line
       setIsListening(false);
+      // eslint-disable-next-line
       setTranscript('');
       return;
     }

@@ -48,7 +48,7 @@ export async function syncOfflineReports(apiBaseUrl: string, onSyncStart?: (coun
   let synced = 0;
   for (const report of reports) {
     try {
-      const payload: any = {};
+      const payload: Record<string, string> = {};
       if (report.text) payload.text = report.text;
       
       await axios.post(`${apiBaseUrl}/ingest`, payload);

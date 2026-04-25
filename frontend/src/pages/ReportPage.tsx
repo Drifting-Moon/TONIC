@@ -23,6 +23,21 @@ interface CrisisOption {
   color: string;
 }
 
+interface SpeechRecognitionEvent {
+  resultIndex: number;
+  results: {
+    [key: number]: {
+      [key: number]: { transcript: string };
+      isFinal: boolean;
+    };
+    length: number;
+  };
+}
+
+interface SpeechRecognitionErrorEvent {
+  error: string;
+}
+
 const crisisOptions: CrisisOption[] = [
   { type: 'medical', emoji: '🚑', label: 'Medical', color: 'bg-red-500' },
   { type: 'flood', emoji: '🌊', label: 'Flood', color: 'bg-blue-500' },

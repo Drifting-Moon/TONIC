@@ -11,6 +11,21 @@ interface VoiceAssistantProps {
   apiBase: string;
 }
 
+interface SpeechRecognitionEvent {
+  resultIndex: number;
+  results: {
+    [key: number]: {
+      [key: number]: { transcript: string };
+      isFinal: boolean;
+    };
+    length: number;
+  };
+}
+
+interface SpeechRecognitionErrorEvent {
+  error: string;
+}
+
 const LOCALIZED_QUESTIONS: Record<string, string[]> = {
   english: [
     "What type of emergency are you facing? For example: flood, fire, medical, food shortage, or water crisis.",
@@ -379,6 +394,7 @@ Note: Parse intelligently considering the user spoke in ${userLangRef.current}.`
     if (isOpen) {
       synthRef.current.cancel();
       synthRef.current.resume();
+      // eslint-disable-next-line @typescript-eslint/no-confusing-void-expression
       resetFlow();
       speakGreeting();
     } else {

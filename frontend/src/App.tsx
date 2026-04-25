@@ -364,6 +364,21 @@ export default function App() {
   };
 
   const startRecording = async () => {
+    interface SpeechRecognitionEvent {
+      resultIndex: number;
+      results: {
+        [key: number]: {
+          [key: number]: { transcript: string };
+          isFinal: boolean;
+        };
+        length: number;
+      };
+    }
+
+    interface SpeechRecognitionErrorEvent {
+      error: string;
+    }
+
     const SpeechRec = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRec) {

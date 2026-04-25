@@ -168,29 +168,34 @@ export default function VoiceAssistant({ isOpen, onClose, apiBase }: VoiceAssist
 
     let isCanceled = false;
     const timeout = setTimeout(() => {
-      if (!isCanceled && isOpenRef.current) {
+      if (!isCanceled && isOpenRef.current && currentUtteranceRef.current === utterance) {
         setIsSpeaking(false);
         if (onComplete) onComplete();
       }
     }, 12000);
 
     utterance.onend = () => {
-      if (isCanceled || !isOpenRef.current) return;
+      if (isCanceled || !isOpenRef.current || currentUtteranceRef.current !== utterance) return;
       clearTimeout(timeout);
       setIsSpeaking(false);
       currentUtteranceRef.current = null;
       if (onComplete) onComplete();
     };
 
-    utterance.onerror = (event) => {
-      if (event.error === 'canceled') isCanceled = true;
-      clearTimeout(timeout);
-      currentUtteranceRef.current = null;
+    utterance.onerror = (e) => {
+      console.error("Speech Synthesis Error", e);
+      if (currentUtteranceRef.current === utterance) {
+        setIsSpeaking(false);
+        if (onComplete) onComplete();
+      }
     };
 
+    // Small delay to ensure browser speech engine is ready after a cancel()
     setTimeout(() => {
-      if (!isCanceled) synthRef.current.speak(utterance);
-    }, 50);
+      if (isOpenRef.current && !isCanceled && currentUtteranceRef.current === utterance) {
+        synthRef.current.speak(utterance);
+      }
+    }, 100);
   };
 
   const startListening = () => {

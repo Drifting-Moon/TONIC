@@ -18,17 +18,14 @@ const QUICK_CHIPS = [
   "What resources are missing right now?"
 ];
 
-export default function AiAssistantPage({ isEmbedded = false }: { isEmbedded?: boolean }) {
-  const [messages, setMessages] = useState<Message[]>([]);
+const WELCOME_MESSAGE: Message = {
+  role: 'model',
+  content: 'Namaste! I am CommunityPulse AI. I can analyze real-time live data of crises and volunteers. How can I help you coordinate today?',
+  timestamp: new Date().getTime()
+};
 
-  useEffect(() => {
-    // Initialize with welcome message on mount
-    setMessages([{
-      role: 'model',
-      content: 'Namaste! I am CommunityPulse AI. I can analyze real-time live data of crises and volunteers. How can I help you coordinate today?',
-      timestamp: new Date().getTime()
-    }]);
-  }, []);
+export default function AiAssistantPage({ isEmbedded = false }: { isEmbedded?: boolean }) {
+  const [messages, setMessages] = useState<Message[]>([WELCOME_MESSAGE]);
   const [inputText, setInputText] = useState("");
   const [isTyping, setIsTyping] = useState(false);
   const [showQuickChips, setShowQuickChips] = useState(true);
